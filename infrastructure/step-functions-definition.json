@@ -1,0 +1,113 @@
+{
+  "Comment": "CloudSentinel AI - Autonomous Incident Remediation State Machine",
+  "StartAt": "TriageAndFilter",
+  "States": {
+    "TriageAndFilter": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "CloudSentinel-prod-IngestIncident",
+        "Payload.$": "$"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "Next": "ParallelDiagnosticAndSecurityAudit"
+    },
+    "ParallelDiagnosticAndSecurityAudit": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "BedrockRootCauseAnalysis",
+          "States": {
+            "BedrockRootCauseAnalysis": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::bedrock:invokeModel",
+              "Parameters": {
+                "ModelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "Body": {
+                  "anthropic_version": "bedrock-2023-05-31",
+                  "max_tokens": 2000,
+                  "messages": [
+                    {
+                      "role": "user",
+                      "content.$": "$.incident_details"
+                    }
+                  ]
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "GroqSecurityIAMGuardrail",
+          "States": {
+            "GroqSecurityIAMGuardrail": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "CloudSentinel-prod-SecurityValidator",
+                "Payload.$": "$"
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "SynthesizeIaCHotPatch"
+    },
+    "SynthesizeIaCHotPatch": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "CloudSentinel-prod-BedrockAgent",
+        "Payload.$": "$"
+      },
+      "Next": "AutonomousRemediationExecutor"
+    },
+    "AutonomousRemediationExecutor": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "CloudSentinel-prod-RemediationExecutor",
+        "Payload.$": "$"
+      },
+      "Next": "VerifyPostRemediationCanary"
+    },
+    "VerifyPostRemediationCanary": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.remediation_result.success",
+          "BooleanEquals": true,
+          "Next": "PublishResolutionSNS"
+        }
+      ],
+      "Default": "TriggerRollbackSafeguard"
+    },
+    "PublishResolutionSNS": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sns:publish",
+      "Parameters": {
+        "TopicArn": "arn:aws:sns:us-east-1:145023097151:CloudSentinel-Alerts",
+        "Message.$": "$.resolution_summary"
+      },
+      "End": true
+    },
+    "TriggerRollbackSafeguard": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "CloudSentinel-prod-RollbackHandler",
+        "Payload.$": "$"
+      },
+      "End": true
+    }
+  }
+}

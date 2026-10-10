@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CloudSentinel AI - Autonomous Multi-Agent Incident Response & Cloud Resilience Platform.
+  Target AWS Account: 145023097151 | Lead Architect: Aaditya Uniyal
+  Provisions Amazon API Gateway, AWS Lambda Microservices, Amazon DynamoDB Single-Table,
+  Amazon S3 Incident Vault, Amazon SNS Alert Topic, and IAM Least-Privilege Roles.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    Description: Deployment environment (prod, staging, dev)
+  AwsAccountId:
+    Type: String
+    Default: '145023097151'
+    Description: Target AWS Account ID
+  LeadArchitect:
+    Type: String
+    Default: 'Aaditya Uniyal'
+    Description: Project Lead Architect Name
+  BedrockModelId:
+    Type: String
+    Default: anthropic.claude-3-5-sonnet-20240620-v1:0
+    Description: Amazon Bedrock Foundation Model ID
+
+Resources:
+  # ------------------------------------------------------------
+  # 1. DynamoDB: Single-Table Architecture
+  # ------------------------------------------------------------
+  CloudSentinelDynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'CloudSentinel-${EnvironmentName}-Table'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Project
+          Value: CloudSentinel-AI
+        - Key: AccountID
+          Value: !Ref AwsAccountId
+        - Key: Architect
+          Value: !Ref LeadArchitect
+        - Key: Challenge
+          Value: AWS-Cloud-Innovation-Challenge
+
+  # ------------------------------------------------------------
+  # 2. Amazon S3: Secure Incident Artifact Vault
+  # ------------------------------------------------------------
+  CloudSentinelArtifactVault:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'customer-pii-vault-${AwsAccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionLogsToGlacier
+            Status: Enabled
+            ExpirationInDays: 90
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: GLACIER
+      Tags:
+        - Key: Project
+          Value: CloudSentinel-AI
+        - Key: AccountID
+          Value: !Ref AwsAccountId
+
+  # ------------------------------------------------------------
+  # 3. Amazon SNS: Critical Incident Alert Topic
+  # ------------------------------------------------------------
+  CloudSentinelAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'CloudSentinel-${EnvironmentName}-Alerts'
+      DisplayName: CloudSentinel AI Incident Alerts
+
+  # ------------------------------------------------------------
+  # 4. IAM Role: Least-Privilege Lambda Execution Role
+  # ------------------------------------------------------------
+  CloudSentinelLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'CloudSentinel-LambdaRole-${EnvironmentName}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: CloudSentinelOperationalPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt CloudSentinelDynamoDBTable.Arn
+                  - !Sub '${CloudSentinelDynamoDBTable.Arn}/index/*'
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt CloudSentinelArtifactVault.Arn
+                  - !Sub '${CloudSentinelArtifactVault.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref CloudSentinelAlertTopic
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: '*'
+
+  # ------------------------------------------------------------
+  # 5. AWS Lambda: Bedrock Multi-Agent Diagnostic Handler
+  # ------------------------------------------------------------
+  BedrockAgentLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'CloudSentinel-${EnvironmentName}-BedrockAgent'
+      Runtime: python3.11
+      Handler: handlers.bedrock_agent.lambda_handler
+      Role: !GetAtt CloudSentinelLambdaRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          AWS_ACCOUNT_ID: !Ref AwsAccountId
+          LEAD_ARCHITECT: !Ref LeadArchitect
+          DYNAMODB_TABLE_NAME: !Ref CloudSentinelDynamoDBTable
+          S3_BUCKET_NAME: !Ref CloudSentinelArtifactVault
+          SNS_TOPIC_ARN: !Ref CloudSentinelAlertTopic
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {"statusCode": 200, "body": "CloudSentinel Bedrock Agent Initialized for Account 145023097151 (Aaditya Uniyal)"}
+
+  # ------------------------------------------------------------
+  # 6. Amazon API Gateway: REST API
+  # ------------------------------------------------------------
+  CloudSentinelApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub 'CloudSentinel-API-${EnvironmentName}'
+      Description: API Gateway for CloudSentinel AI Incident Intelligence & Remediation Engine
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+Outputs:
+  DynamoDBTableName:
+    Description: DynamoDB Table Name
+    Value: !Ref CloudSentinelDynamoDBTable
+  S3BucketName:
+    Description: S3 Artifact Bucket
+    Value: !Ref CloudSentinelArtifactVault
+  SNSTopicArn:
+    Description: SNS Alert Topic ARN
+    Value: !Ref CloudSentinelAlertTopic
+  ApiGatewayEndpoint:
+    Description: Live API Gateway Endpoint URL
+    Value: !Sub 'https://${CloudSentinelApiGateway}.execute-api.${AWS::Region}.amazonaws.com/prod'

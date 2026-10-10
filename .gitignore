@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Build outputs
+dist/
+build/
+.cache/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+.coverage
+.agents/
