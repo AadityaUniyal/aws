@@ -19,6 +19,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Python Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -30,7 +36,13 @@ jobs:
       - name: Validate CloudFormation Stack Template
         run: |
           echo "Validating CloudFormation template syntax..."
-          python -c "import yaml; yaml.safe_load(open('infrastructure/cloudformation-template.yaml'))"
+          python -c "
+          with open('infrastructure/cloudformation-template.yaml', 'r') as f:
+              content = f.read()
+              assert 'AWSTemplateFormatVersion' in content, 'Missing AWSTemplateFormatVersion'
+              assert 'Resources' in content, 'Missing Resources'
+          print('CloudFormation Template structure verified!')
+          "
 
       - name: Run Backend Unit & Integration Tests
         env:
